@@ -1,0 +1,16 @@
+{
+  "name": "dsqlex-c",
+  "version": "0.1.0",
+  "description": "DSQLEX expression evaluator — Node.js bindings for the C library",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "scripts": {
+    "build": "node-gyp rebuild",
+    "test": "node test/test.mjs"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.0.0",
+    "node-gyp": "^10.0.0"
+  },
+  "gypfile": true
+}

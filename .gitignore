@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+
+# Node bindings
+bindings/node/node_modules/
+bindings/node/build/
+bindings/node/prebuilds/
+
+# Elixir bindings
+bindings/elixir/_build/
+bindings/elixir/deps/
+bindings/elixir/priv/
+
+# Python bindings
+bindings/python/__pycache__/
+bindings/python/*.egg-info/
+
+# OS
+.DS_Store
+__pycache__/
+*.pyc
