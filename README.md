@@ -171,3 +171,11 @@ const char* dsqlex_last_error(void);
 - **Hidden symbols**: Only the C API is exported from the shared library. Internal mpdecimal symbols are hidden.
 - **Parse once, eval many**: The AST is immutable and can be shared across threads. Each thread needs its own context.
 - **NULL = skip event**: Returning NULL signals "no event" in the ETL pipeline.
+
+## Related
+
+- [dsqlex-rs](https://github.com/nicolasalmini/dsqlex-rs) — Rust implementation (rust_decimal)
+- [dsqlex-go](https://github.com/nicolasalmini/dsqlex-go) — Go implementation (govalues/decimal)
+- [dsqlex-py](https://github.com/nicolasalmini/dsqlex-py) — Python implementation
+- [dsqlex-ts](https://github.com/nicolasalmini/dsqlex-ts) — TypeScript implementation
+- [dsqlex-bench](https://github.com/nicolasalmini/dsqlex-bench) — Cross-language benchmark suite
