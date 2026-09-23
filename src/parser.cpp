@@ -92,6 +92,13 @@ ASTPtr ASTNode::make_not_like(ASTPtr expr, ASTPtr pattern) {
     n->right = std::move(pattern);
     return n;
 }
+ASTPtr ASTNode::make_unary_op(BinOp op, ASTPtr operand) {
+    auto n = std::make_unique<ASTNode>();
+    n->kind = NodeKind::UnaryOp;
+    n->op = op;
+    n->expr = std::move(operand);
+    return n;
+}
 
 // ---- Recursive Descent Parser -----------------------------------------------
 
@@ -146,6 +153,7 @@ private:
             case TokenType::FnUpper: case TokenType::FnLower:
             case TokenType::FnRound: case TokenType::FnCoalesce:
             case TokenType::FnAbs:   case TokenType::FnConcat:
+            case TokenType::FnLeast: case TokenType::FnGreatest:
             case TokenType::FnEvent:
                 return true;
             default: return false;
@@ -160,6 +168,8 @@ private:
             case TokenType::FnCoalesce: return "COALESCE";
             case TokenType::FnAbs:      return "ABS";
             case TokenType::FnConcat:   return "CONCAT";
+            case TokenType::FnLeast:    return "LEAST";
+            case TokenType::FnGreatest: return "GREATEST";
             case TokenType::FnEvent:    return "EVENT";
             default: return "UNKNOWN";
         }
@@ -266,10 +276,10 @@ private:
             expect(TokenType::LParen, "Expected '(' after IN");
             std::vector<ASTPtr> items;
             if (!peek_is(TokenType::RParen)) {
-                items.push_back(parse_logical());
+                items.push_back(parse_primary());
                 while (peek_is(TokenType::Comma)) {
                     advance();
-                    items.push_back(parse_logical());
+                    items.push_back(parse_primary());
                 }
             }
             expect(TokenType::RParen, "Expected closing parenthesis ')' after IN list");
@@ -355,6 +365,11 @@ private:
             throw std::runtime_error("Unexpected end of expression");
 
         auto& tok = peek();
+
+        if (tok.type == TokenType::Minus) {
+            advance();
+            return ASTNode::make_unary_op(BinOp::Minus, parse_primary());
+        }
 
         // Parenthesized expression
         if (tok.type == TokenType::LParen) {

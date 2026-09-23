@@ -19,6 +19,7 @@ enum class NodeKind {
     NotInExpr,
     LikeExpr,
     NotLikeExpr,
+    UnaryOp,
 };
 
 enum class BinOp {
@@ -64,6 +65,7 @@ struct ASTNode {
     static ASTPtr make_not_in(ASTPtr expr, std::vector<ASTPtr> items);
     static ASTPtr make_like(ASTPtr expr, ASTPtr pattern);
     static ASTPtr make_not_like(ASTPtr expr, ASTPtr pattern);
+    static ASTPtr make_unary_op(BinOp op, ASTPtr operand);
 };
 
 } // namespace dsqlex

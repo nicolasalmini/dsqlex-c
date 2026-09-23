@@ -123,17 +123,22 @@ const val = evalAST(ast, { amount: 100, rate: 1.5 });
 
 | Feature | Syntax |
 |---------|--------|
-| Arithmetic | `+`, `-`, `*`, `/` (decimal precision) |
+| Arithmetic | `+`, `-`, `*`, `/` (decimal precision), unary `-` (`-x`, `-(a + b)`) |
 | Comparison | `=`, `!=`, `<`, `>`, `<=`, `>=` |
 | Logical | `AND`, `OR` (same-op chaining; mixing requires parens) |
 | Conditionals | `CASE WHEN ... THEN ... ELSE ... END` |
-| Functions | `ROUND()`, `COALESCE()`/`NVL()`, `UPPER()`, `LOWER()`, `ABS()`, `CONCAT()`, `EVENT()` |
+| Functions | `ROUND()`, `COALESCE()`/`NVL()`, `UPPER()`, `LOWER()`, `ABS()`, `CONCAT()`, `LEAST()`, `GREATEST()`, `EVENT()` |
 | Membership | `IN (...)`, `NOT IN (...)` |
 | Pattern | `LIKE`, `NOT LIKE` (case-insensitive) |
 | Null check | `IS NULL`, `IS NOT NULL`, `IS TRUE`, `IS FALSE` |
 | Literals | Numbers, strings (`'...'`), `TRUE`, `FALSE`, `NULL` |
-| Dot-paths | `config.pricing.margin_rate` (nested context access) |
+| Identifiers | `field`, `a.b`, single trailing `?` (`active?`, `user.admin?`) |
+| Dot-paths | `config.pricing.margin_rate` (nested contexts and lists of contexts) |
 | Comments | `--`, `#`, `/* ... */` |
+
+NULL propagates through arithmetic and `ROUND`/`ABS`. `LEAST`/`GREATEST` require at least one argument, return NULL if any argument is NULL, compare decimals numerically, strings lexicographically, and same-kind temporal values (date/datetime/naive datetime/time) chronologically.
+
+`EVENT(type, subtype)` takes literal identifier arguments and calls the configured event resolver `(type, subtype, ctx, visited)`; `EVENT(type, subtype, source)` resolves `source` against a named nested context or a named list of contexts (list results are summed as decimals; an empty list yields `0`).
 
 ## C API
 
@@ -150,6 +155,13 @@ void dsqlex_context_set_decimal(dsqlex_context*, const char* key, const char* va
 void dsqlex_context_set_string(dsqlex_context*, const char* key, const char* val);
 void dsqlex_context_set_bool(dsqlex_context*, const char* key, bool val);
 void dsqlex_context_set_null(dsqlex_context*, const char* key);
+dsqlex_context* dsqlex_context_set_nested(dsqlex_context*, const char* key);
+dsqlex_context* dsqlex_context_list_add(dsqlex_context*, const char* key);
+void dsqlex_context_set_empty_list(dsqlex_context*, const char* key);
+void dsqlex_context_set_date(dsqlex_context*, const char* key, int y, int m, int d);
+void dsqlex_context_set_datetime(dsqlex_context*, const char* key, int y, int m, int d, int h, int mi, int s);
+void dsqlex_context_set_naive_datetime(dsqlex_context*, const char* key, int y, int m, int d, int h, int mi, int s);
+void dsqlex_context_set_time(dsqlex_context*, const char* key, int h, int mi, int s);
 void dsqlex_context_free(dsqlex_context*);
 
 // Evaluate many times
@@ -163,6 +175,10 @@ void dsqlex_result_free(dsqlex_result*);
 // Error handling
 const char* dsqlex_last_error(void);
 ```
+
+Result types reported by `dsqlex_result_type` are `DSQLEX_TYPE_DECIMAL`, `DSQLEX_TYPE_STRING`, `DSQLEX_TYPE_BOOL`, `DSQLEX_TYPE_NULL`, and (since the temporal/list parity additions) `DSQLEX_TYPE_DATE`, `DSQLEX_TYPE_DATETIME`, `DSQLEX_TYPE_NAIVE_DATETIME`, `DSQLEX_TYPE_TIME`, `DSQLEX_TYPE_LIST`, `DSQLEX_TYPE_MAP`. Temporal and list results expose a serialized form through `dsqlex_result_string`; for `DSQLEX_TYPE_MAP` results, `dsqlex_result_decimal` and `dsqlex_result_string` return NULL and there is no map introspection API.
+
+The C ABI additions above (temporal/list input setters and the extended result types) are available to direct consumers of `libdsqlex`. The existing Python (ctypes), Elixir (NIF), and Node.js (N-API) wrappers already support nested map context inputs, but not the newly added temporal/list inputs or typed outputs — those need a follow-up binding update; the Python binding raises `DsqlexError` rather than silently returning `None` when it encounters an unsupported result type.
 
 ## Design Decisions
 
