@@ -1,6 +1,7 @@
 #include "dsqlex/evaluator.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -15,6 +16,26 @@ void Context::set(const std::string& key, Value val) {
 
 void Context::set_nested(const std::string& key, Context ctx) {
     nested[key] = std::move(ctx);
+}
+
+void Context::set_list(const std::string& key, std::vector<Context> items) {
+    lists[key] = std::move(items);
+}
+
+void Context::set_date(const std::string& key, Date val) {
+    fields[key] = Value{val};
+}
+
+void Context::set_datetime(const std::string& key, DateTime val) {
+    fields[key] = Value{val};
+}
+
+void Context::set_naive_datetime(const std::string& key, NaiveDateTime val) {
+    fields[key] = Value{val};
+}
+
+void Context::set_time(const std::string& key, Time val) {
+    fields[key] = Value{val};
 }
 
 // ---- Helpers ----------------------------------------------------------------
@@ -53,6 +74,36 @@ std::string val_to_string(const Value& v) {
         return *s;
     if (auto* b = std::get_if<bool>(&v))
         return *b ? "TRUE" : "FALSE";
+    if (auto* dt = std::get_if<Date>(&v)) {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", dt->year, dt->month, dt->day);
+        return buf;
+    }
+    if (auto* dt = std::get_if<DateTime>(&v)) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                      dt->year, dt->month, dt->day, dt->hour, dt->minute, dt->second);
+        return buf;
+    }
+    if (auto* dt = std::get_if<NaiveDateTime>(&v)) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+                      dt->year, dt->month, dt->day, dt->hour, dt->minute, dt->second);
+        return buf;
+    }
+    if (auto* t = std::get_if<Time>(&v)) {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t->hour, t->minute, t->second);
+        return buf;
+    }
+    if (auto* l = std::get_if<std::shared_ptr<ValueList>>(&v)) {
+        std::string out;
+        for (size_t i = 0; i < (*l)->items.size(); ++i) {
+            if (i) out += ',';
+            out += val_to_string((*l)->items[i]);
+        }
+        return out;
+    }
     return "";
 }
 
@@ -78,7 +129,37 @@ int compare_values(const Value& lhs, const Value& rhs) {
         std::holds_alternative<std::string>(rhs)) {
         auto& l = std::get<std::string>(lhs);
         auto& r = std::get<std::string>(rhs);
-        return l.compare(r);
+        int c = l.compare(r);
+        return c < 0 ? -1 : c > 0 ? 1 : 0;
+    }
+
+    if (auto* a = std::get_if<Date>(&lhs)) {
+        if (auto* b = std::get_if<Date>(&rhs)) {
+            auto lt = std::tie(a->year, a->month, a->day);
+            auto rt = std::tie(b->year, b->month, b->day);
+            return lt < rt ? -1 : lt > rt ? 1 : 0;
+        }
+    }
+    if (auto* a = std::get_if<DateTime>(&lhs)) {
+        if (auto* b = std::get_if<DateTime>(&rhs)) {
+            auto lt = std::tie(a->year, a->month, a->day, a->hour, a->minute, a->second);
+            auto rt = std::tie(b->year, b->month, b->day, b->hour, b->minute, b->second);
+            return lt < rt ? -1 : lt > rt ? 1 : 0;
+        }
+    }
+    if (auto* a = std::get_if<NaiveDateTime>(&lhs)) {
+        if (auto* b = std::get_if<NaiveDateTime>(&rhs)) {
+            auto lt = std::tie(a->year, a->month, a->day, a->hour, a->minute, a->second);
+            auto rt = std::tie(b->year, b->month, b->day, b->hour, b->minute, b->second);
+            return lt < rt ? -1 : lt > rt ? 1 : 0;
+        }
+    }
+    if (auto* a = std::get_if<Time>(&lhs)) {
+        if (auto* b = std::get_if<Time>(&rhs)) {
+            auto lt = std::tie(a->hour, a->minute, a->second);
+            auto rt = std::tie(b->hour, b->minute, b->second);
+            return lt < rt ? -1 : lt > rt ? 1 : 0;
+        }
     }
 
     // Both bool
@@ -102,7 +183,8 @@ int compare_values(const Value& lhs, const Value& rhs) {
     // Fallback: string comparison
     auto ls = val_to_string(lhs);
     auto rs = val_to_string(rhs);
-    return ls.compare(rs);
+    int fc = ls.compare(rs);
+    return fc < 0 ? -1 : fc > 0 ? 1 : 0;
 }
 
 // SQL LIKE pattern matching (case-insensitive).
@@ -130,46 +212,133 @@ bool like_match(const std::string& text, const std::string& pattern) {
     return std::regex_match(text, re);
 }
 
+struct PathAcc {
+    const Context* ctx = nullptr;
+    const Value* val = nullptr;
+    const std::vector<Context>* list = nullptr;
+};
+
+bool is_decimal_like(const Value& v) {
+    if (std::holds_alternative<decimal::Decimal>(v)) return true;
+    if (auto* s = std::get_if<std::string>(&v)) {
+        try {
+            make_decimal(*s);
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+    return false;
+}
+
+Value resolve_dot_path(const std::vector<std::string>& parts, size_t idx,
+                       PathAcc acc, const std::string& path,
+                       const EvalOptions& opts) {
+    if (idx >= parts.size()) {
+        if (acc.val) return *acc.val;
+        if (acc.ctx)
+            return Value{std::make_shared<Context>(*acc.ctx)};
+        if (acc.list) {
+            ValueList out;
+            for (auto& item : *acc.list)
+                out.items.push_back(Value{std::make_shared<Context>(item)});
+            return Value{std::make_shared<ValueList>(std::move(out))};
+        }
+        throw std::runtime_error("Cannot access non-value at path '" + path + "'");
+    }
+
+    if (acc.list) {
+        std::vector<Value> results;
+        for (auto& item : *acc.list) {
+            PathAcc item_acc;
+            item_acc.ctx = &item;
+            results.push_back(resolve_dot_path(parts, idx, item_acc, path, opts));
+        }
+        bool all_numeric = true;
+        for (auto& r : results) {
+            if (!is_decimal_like(r)) {
+                all_numeric = false;
+                break;
+            }
+        }
+        if (!all_numeric)
+            return Value{std::make_shared<ValueList>(ValueList{std::move(results)})};
+        decimal::Decimal sum("0");
+        for (auto& r : results)
+            sum += value_to_decimal(r);
+        return Value{sum};
+    }
+
+    if (acc.ctx) {
+        const std::string& key = parts[idx];
+        auto fit = acc.ctx->fields.find(key);
+        if (fit != acc.ctx->fields.end()) {
+            PathAcc next;
+            next.val = &fit->second;
+            return resolve_dot_path(parts, idx + 1, next, path, opts);
+        }
+        auto nit = acc.ctx->nested.find(key);
+        if (nit != acc.ctx->nested.end()) {
+            PathAcc next;
+            next.ctx = &nit->second;
+            return resolve_dot_path(parts, idx + 1, next, path, opts);
+        }
+        auto lit = acc.ctx->lists.find(key);
+        if (lit != acc.ctx->lists.end()) {
+            PathAcc next;
+            next.list = &lit->second;
+            return resolve_dot_path(parts, idx + 1, next, path, opts);
+        }
+        throw std::runtime_error(
+            "Unknown field: " + path + " (failed at '" + key + "')");
+    }
+
+    throw std::runtime_error(
+        "Cannot access '" + parts[idx] + "' on non-map value in path '" + path + "'");
+}
+
 // Resolve a dot-path identifier from context.
 Value resolve_identifier(const std::string& name, const Context& ctx,
                          const EvalOptions& opts) {
-    // Check circular references
-    if (opts.visited.count(name))
-        throw std::runtime_error("Circular reference detected: " + name);
-
     // Simple lookup first
     auto it = ctx.fields.find(name);
     if (it != ctx.fields.end())
         return it->second;
 
     // Dot-path resolution
-    auto dot_pos = name.find('.');
-    if (dot_pos != std::string::npos) {
-        std::string first_key = name.substr(0, dot_pos);
-        std::string rest = name.substr(dot_pos + 1);
-
-        auto nested_it = ctx.nested.find(first_key);
-        if (nested_it != ctx.nested.end()) {
-            // Recurse into nested context
-            return resolve_identifier(rest, nested_it->second, opts);
+    if (name.find('.') != std::string::npos) {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        while (true) {
+            auto dot = name.find('.', start);
+            if (dot == std::string::npos) {
+                parts.push_back(name.substr(start));
+                break;
+            }
+            parts.push_back(name.substr(start, dot - start));
+            start = dot + 1;
         }
+        PathAcc acc;
+        acc.ctx = &ctx;
+        return resolve_dot_path(parts, 0, acc, name, opts);
+    }
 
-        // Check if the first part is in fields
-        auto field_it = ctx.fields.find(first_key);
-        if (field_it != ctx.fields.end()) {
-            throw std::runtime_error(
-                "Cannot access '" + rest + "' on non-map value in path '" + name + "'");
-        }
-
-        throw std::runtime_error(
-            "Unknown field: " + name + " (failed at '" + first_key + "')");
+    auto nit = ctx.nested.find(name);
+    if (nit != ctx.nested.end())
+        return Value{std::make_shared<Context>(nit->second)};
+    auto lit = ctx.lists.find(name);
+    if (lit != ctx.lists.end()) {
+        ValueList out;
+        for (auto& item : lit->second)
+            out.items.push_back(Value{std::make_shared<Context>(item)});
+        return Value{std::make_shared<ValueList>(std::move(out))};
     }
 
     // Try custom resolver
     if (opts.resolver) {
-        auto new_visited = opts.visited;
-        new_visited.insert(name);
-        return opts.resolver(name, new_visited);
+        if (opts.visited.count(name))
+            throw std::runtime_error("Circular reference detected: " + name);
+        return opts.resolver(name, opts.visited);
     }
 
     throw std::runtime_error("Unknown field: " + name);
@@ -177,6 +346,8 @@ Value resolve_identifier(const std::string& name, const Context& ctx,
 
 // Forward declaration
 Value eval_node(const ASTNode& node, const Context& ctx, const EvalOptions& opts);
+Value resolve_event(const std::string& type_str, const std::string& subtype_str,
+                    const Context& ctx, const EvalOptions& opts);
 
 // Evaluate a binary operation
 Value eval_binary_op(BinOp op, const ASTNode& left_node, const ASTNode& right_node,
@@ -197,6 +368,16 @@ Value eval_binary_op(BinOp op, const ASTNode& left_node, const ASTNode& right_no
     auto right = eval_node(right_node, ctx, opts);
 
     // Arithmetic
+    switch (op) {
+        case BinOp::Plus:
+        case BinOp::Minus:
+        case BinOp::Multiply:
+        case BinOp::Divide:
+            if (is_null(left) || is_null(right))
+                return Value{NullValue{}};
+            break;
+        default: break;
+    }
     switch (op) {
         case BinOp::Plus:
             return Value{value_to_decimal(left) + value_to_decimal(right)};
@@ -247,7 +428,7 @@ Value eval_function(const ASTNode& node, const Context& ctx, const EvalOptions& 
             throw std::runtime_error("ROUND requires 2 arguments");
         auto val = eval_node(*args[0], ctx, opts);
         auto prec = eval_node(*args[1], ctx, opts);
-        if (is_null(val)) return Value{NullValue{}};
+        if (is_null(val) || is_null(prec)) return Value{NullValue{}};
 
         auto d = value_to_decimal(val);
         auto p = value_to_decimal(prec);
@@ -308,53 +489,87 @@ Value eval_function(const ASTNode& node, const Context& ctx, const EvalOptions& 
         return Value{std::move(result)};
     }
 
+    if (name == "LEAST" || name == "GREATEST") {
+        if (args.empty())
+            throw std::runtime_error("LEAST/GREATEST requires at least one argument");
+
+        std::vector<Value> vals;
+        vals.reserve(args.size());
+        bool has_null = false;
+        for (auto& arg : args) {
+            auto v = eval_node(*arg, ctx, opts);
+            if (is_null(v)) has_null = true;
+            vals.push_back(std::move(v));
+        }
+        if (has_null) return Value{NullValue{}};
+
+        int target = (name == "LEAST") ? -1 : 1;
+        const Value* best = &vals[0];
+        for (size_t i = 1; i < vals.size(); ++i) {
+            int c = compare_values(vals[i], *best);
+            if (c == -2) continue;
+            if (c == target)
+                best = &vals[i];
+        }
+        return *best;
+    }
+
     if (name == "EVENT") {
-        if (args.size() < 2 || args.size() > 3)
+        bool valid = args.size() == 2 || args.size() == 3;
+        if (valid) {
+            for (auto& a : args) {
+                if (a->kind != NodeKind::Identifier) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if (!valid)
             throw std::runtime_error(
                 "EVENT requires 2 or 3 arguments: EVENT(type, subtype) "
                 "or EVENT(type, subtype, context_source)");
 
-        if (!opts.event_resolver)
-            throw std::runtime_error("EVENT() calls require an :event_resolver option");
+        const std::string& type_str = args[0]->text;
+        const std::string& subtype_str = args[1]->text;
 
-        auto type_val = eval_node(*args[0], ctx, opts);
-        auto subtype_val = eval_node(*args[1], ctx, opts);
+        if (args.size() == 2)
+            return resolve_event(type_str, subtype_str, ctx, opts);
 
-        auto type_str = val_to_string(type_val);
-        auto subtype_str = val_to_string(subtype_val);
-
-        // Check circular reference
-        auto event_key = type_str + "." + subtype_str;
-        if (opts.visited.count(event_key))
-            throw std::runtime_error("Circular reference detected: " + event_key);
-
-        auto new_opts = opts;
-        new_opts.visited.insert(event_key);
-
-        if (args.size() == 2) {
-            return opts.event_resolver(type_str, subtype_str, ctx, new_opts.visited);
+        const std::string& source = args[2]->text;
+        auto list_it = ctx.lists.find(source);
+        if (list_it != ctx.lists.end()) {
+            decimal::Decimal sum("0");
+            for (auto& item : list_it->second) {
+                auto v = resolve_event(type_str, subtype_str, item, opts);
+                sum += value_to_decimal(v);
+            }
+            return Value{sum};
         }
-
-        // 3-arg form: EVENT(type, subtype, context_source)
-        auto source_val = eval_node(*args[2], ctx, opts);
-        auto source_name = val_to_string(source_val);
-
-        // Look up the source in context nested
-        auto nested_it = ctx.nested.find(source_name);
-        if (nested_it == ctx.nested.end()) {
-            // Check fields
-            auto field_it = ctx.fields.find(source_name);
-            if (field_it == ctx.fields.end())
-                throw std::runtime_error(
-                    "EVENT context source '" + source_name + "' not found in context");
+        auto nested_it = ctx.nested.find(source);
+        if (nested_it != ctx.nested.end())
+            return resolve_event(type_str, subtype_str, nested_it->second, opts);
+        if (ctx.fields.count(source))
             throw std::runtime_error(
-                "EVENT context source '" + source_name + "' must be a map or list of maps");
-        }
-
-        return opts.event_resolver(type_str, subtype_str, nested_it->second, new_opts.visited);
+                "EVENT context source '" + source + "' must be a map or list of maps");
+        throw std::runtime_error(
+            "EVENT context source '" + source + "' not found in context");
     }
 
     throw std::runtime_error("Unknown function: " + name);
+}
+
+Value resolve_event(const std::string& type_str, const std::string& subtype_str,
+                    const Context& ctx, const EvalOptions& opts) {
+    if (!opts.event_resolver)
+        throw std::runtime_error("EVENT() calls require an :event_resolver option");
+
+    auto event_key = type_str + "." + subtype_str;
+    if (opts.visited.count(event_key))
+        throw std::runtime_error("Circular reference detected: " + event_key);
+
+    auto new_visited = opts.visited;
+    new_visited.insert(event_key);
+    return opts.event_resolver(type_str, subtype_str, ctx, new_visited);
 }
 
 // Main evaluation dispatch
@@ -380,6 +595,12 @@ Value eval_node(const ASTNode& node, const Context& ctx, const EvalOptions& opts
 
         case NodeKind::BinaryOp:
             return eval_binary_op(node.op, *node.left, *node.right, ctx, opts);
+
+        case NodeKind::UnaryOp: {
+            auto operand = eval_node(*node.expr, ctx, opts);
+            if (is_null(operand)) return Value{NullValue{}};
+            return Value{-value_to_decimal(operand)};
+        }
 
         case NodeKind::CaseExpr:
             return eval_case(node, ctx, opts);

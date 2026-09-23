@@ -49,6 +49,18 @@ DSQLEX_API void dsqlex_context_set_string(dsqlex_context* ctx, const char* key, 
 DSQLEX_API void dsqlex_context_set_bool(dsqlex_context* ctx, const char* key, bool value);
 DSQLEX_API void dsqlex_context_set_null(dsqlex_context* ctx, const char* key);
 DSQLEX_API dsqlex_context* dsqlex_context_set_nested(dsqlex_context* ctx, const char* key);
+DSQLEX_API dsqlex_context* dsqlex_context_list_add(dsqlex_context* ctx, const char* key);
+DSQLEX_API void dsqlex_context_set_empty_list(dsqlex_context* ctx, const char* key);
+DSQLEX_API void dsqlex_context_set_date(dsqlex_context* ctx, const char* key,
+                                        int year, int month, int day);
+DSQLEX_API void dsqlex_context_set_datetime(dsqlex_context* ctx, const char* key,
+                                            int year, int month, int day,
+                                            int hour, int minute, int second);
+DSQLEX_API void dsqlex_context_set_naive_datetime(dsqlex_context* ctx, const char* key,
+                                                  int year, int month, int day,
+                                                  int hour, int minute, int second);
+DSQLEX_API void dsqlex_context_set_time(dsqlex_context* ctx, const char* key,
+                                        int hour, int minute, int second);
 DSQLEX_API void dsqlex_context_free(dsqlex_context* ctx);
 
 /* ---------- Evaluation ---------------------------------------------------- */
@@ -80,6 +92,12 @@ typedef enum {
     DSQLEX_TYPE_STRING  = 1,
     DSQLEX_TYPE_BOOL    = 2,
     DSQLEX_TYPE_NULL    = 3,
+    DSQLEX_TYPE_DATE    = 4,
+    DSQLEX_TYPE_DATETIME = 5,
+    DSQLEX_TYPE_NAIVE_DATETIME = 6,
+    DSQLEX_TYPE_TIME    = 7,
+    DSQLEX_TYPE_LIST    = 8,
+    DSQLEX_TYPE_MAP     = 9,
 } dsqlex_type;
 
 DSQLEX_API dsqlex_type dsqlex_result_type(const dsqlex_result* r);

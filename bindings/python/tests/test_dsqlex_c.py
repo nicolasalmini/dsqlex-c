@@ -126,6 +126,71 @@ def test_real_world_expression():
     assert result == Decimal("500.00")
 
 
+def test_unsupported_temporal_result_raises():
+    import ctypes
+    import dsqlex_c
+    lib = dsqlex_c._lib
+    lib.dsqlex_context_set_date.restype = None
+    lib.dsqlex_context_set_date.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    ]
+    ast = parse("d")
+    ctx = lib.dsqlex_context_new()
+    lib.dsqlex_context_set_date(ctx, b"d", 2024, 1, 1)
+    try:
+        r = lib.dsqlex_eval(ast._ptr, ctx)
+        dsqlex_c._check_error(r)
+        try:
+            dsqlex_c._extract_result(r)
+            assert False, "Should have raised DsqlexError"
+        except DsqlexError:
+            pass
+    finally:
+        lib.dsqlex_context_free(ctx)
+
+
+def test_unsupported_list_result_raises():
+    import ctypes
+    import dsqlex_c
+    lib = dsqlex_c._lib
+    lib.dsqlex_context_list_add.restype = ctypes.c_void_p
+    lib.dsqlex_context_list_add.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    ast = parse("items.name")
+    ctx = lib.dsqlex_context_new()
+    item = lib.dsqlex_context_list_add(ctx, b"items")
+    lib.dsqlex_context_set_string(item, b"name", b"x")
+    try:
+        r = lib.dsqlex_eval(ast._ptr, ctx)
+        dsqlex_c._check_error(r)
+        try:
+            dsqlex_c._extract_result(r)
+            assert False, "Should have raised DsqlexError"
+        except DsqlexError:
+            pass
+    finally:
+        lib.dsqlex_context_free(ctx)
+
+
+def test_list_decimal_sum_via_binding():
+    import ctypes
+    import dsqlex_c
+    lib = dsqlex_c._lib
+    lib.dsqlex_context_list_add.restype = ctypes.c_void_p
+    lib.dsqlex_context_list_add.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    ast = parse("items.amt")
+    ctx = lib.dsqlex_context_new()
+    for amt in (b"2.5", b"3.5"):
+        item = lib.dsqlex_context_list_add(ctx, b"items")
+        lib.dsqlex_context_set_decimal(item, b"amt", amt)
+    try:
+        r = lib.dsqlex_eval(ast._ptr, ctx)
+        dsqlex_c._check_error(r)
+        assert dsqlex_c._extract_result(r) == Decimal("6.0")
+    finally:
+        lib.dsqlex_context_free(ctx)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = failed = 0

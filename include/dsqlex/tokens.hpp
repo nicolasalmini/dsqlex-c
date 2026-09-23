@@ -16,6 +16,7 @@ enum class TokenType {
     Is, In, Like,
     // Functions
     FnUpper, FnLower, FnRound, FnCoalesce, FnAbs, FnConcat, FnEvent,
+    FnLeast, FnGreatest,
     // Literals & identifiers
     Number,     // value in Token::text
     String,     // value in Token::text

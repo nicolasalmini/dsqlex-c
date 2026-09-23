@@ -17,8 +17,10 @@ struct dsqlex_context {
     dsqlex::Context ctx;
     // Track child contexts with their keys for sync before eval
     std::vector<std::pair<std::string, dsqlex_context*>> children;
+    std::vector<std::pair<std::string, dsqlex_context*>> list_children;
     ~dsqlex_context() {
         for (auto& [k, c] : children) delete c;
+        for (auto& [k, c] : list_children) delete c;
     }
 
     // Recursively sync children's ctx into parent's nested map
@@ -26,6 +28,17 @@ struct dsqlex_context {
         for (auto& [key, child] : children) {
             child->sync();
             ctx.set_nested(key, child->ctx);
+        }
+        std::map<std::string, std::vector<dsqlex_context*>> grouped;
+        for (auto& [key, child] : list_children)
+            grouped[key].push_back(child);
+        for (auto& [key, group] : grouped) {
+            std::vector<dsqlex::Context> items;
+            for (auto* child : group) {
+                child->sync();
+                items.push_back(child->ctx);
+            }
+            ctx.set_list(key, std::move(items));
         }
     }
 };
@@ -96,6 +109,38 @@ dsqlex_context* dsqlex_context_set_nested(dsqlex_context* ctx, const char* key) 
     auto* child = new dsqlex_context{};
     ctx->children.emplace_back(std::string(key), child);
     return child;
+}
+
+dsqlex_context* dsqlex_context_list_add(dsqlex_context* ctx, const char* key) {
+    auto* child = new dsqlex_context{};
+    ctx->list_children.emplace_back(std::string(key), child);
+    return child;
+}
+
+void dsqlex_context_set_empty_list(dsqlex_context* ctx, const char* key) {
+    ctx->ctx.set_list(key, {});
+}
+
+void dsqlex_context_set_date(dsqlex_context* ctx, const char* key,
+                             int year, int month, int day) {
+    ctx->ctx.set(key, dsqlex::Value{dsqlex::Date{year, month, day}});
+}
+
+void dsqlex_context_set_datetime(dsqlex_context* ctx, const char* key,
+                                 int year, int month, int day,
+                                 int hour, int minute, int second) {
+    ctx->ctx.set(key, dsqlex::Value{dsqlex::DateTime{year, month, day, hour, minute, second}});
+}
+
+void dsqlex_context_set_naive_datetime(dsqlex_context* ctx, const char* key,
+                                       int year, int month, int day,
+                                       int hour, int minute, int second) {
+    ctx->ctx.set(key, dsqlex::Value{dsqlex::NaiveDateTime{year, month, day, hour, minute, second}});
+}
+
+void dsqlex_context_set_time(dsqlex_context* ctx, const char* key,
+                             int hour, int minute, int second) {
+    ctx->ctx.set(key, dsqlex::Value{dsqlex::Time{hour, minute, second}});
 }
 
 void dsqlex_context_free(dsqlex_context* ctx) {
@@ -171,6 +216,14 @@ dsqlex_type dsqlex_result_type(const dsqlex_result* r) {
     if (std::holds_alternative<decimal::Decimal>(r->value)) return DSQLEX_TYPE_DECIMAL;
     if (std::holds_alternative<std::string>(r->value)) return DSQLEX_TYPE_STRING;
     if (std::holds_alternative<bool>(r->value)) return DSQLEX_TYPE_BOOL;
+    if (std::holds_alternative<dsqlex::Date>(r->value)) return DSQLEX_TYPE_DATE;
+    if (std::holds_alternative<dsqlex::DateTime>(r->value)) return DSQLEX_TYPE_DATETIME;
+    if (std::holds_alternative<dsqlex::NaiveDateTime>(r->value)) return DSQLEX_TYPE_NAIVE_DATETIME;
+    if (std::holds_alternative<dsqlex::Time>(r->value)) return DSQLEX_TYPE_TIME;
+    if (std::holds_alternative<std::shared_ptr<dsqlex::ValueList>>(r->value))
+        return DSQLEX_TYPE_LIST;
+    if (std::holds_alternative<std::shared_ptr<dsqlex::Context>>(r->value))
+        return DSQLEX_TYPE_MAP;
     return DSQLEX_TYPE_NULL;
 }
 
@@ -183,8 +236,16 @@ const char* dsqlex_result_decimal(const dsqlex_result* r) {
 
 const char* dsqlex_result_string(const dsqlex_result* r) {
     auto* s = std::get_if<std::string>(&r->value);
-    if (!s) return nullptr;
-    return s->c_str();
+    if (s) return s->c_str();
+    if (std::holds_alternative<dsqlex::Date>(r->value) ||
+        std::holds_alternative<dsqlex::DateTime>(r->value) ||
+        std::holds_alternative<dsqlex::NaiveDateTime>(r->value) ||
+        std::holds_alternative<dsqlex::Time>(r->value) ||
+        std::holds_alternative<std::shared_ptr<dsqlex::ValueList>>(r->value)) {
+        const_cast<dsqlex_result*>(r)->str_cache = dsqlex::value_to_string(r->value);
+        return r->str_cache.c_str();
+    }
+    return nullptr;
 }
 
 bool dsqlex_result_bool(const dsqlex_result* r) {

@@ -52,6 +52,8 @@ const WordMap& word_map() {
         {"NVL",      TokenType::FnCoalesce}, // alias
         {"ABS",      TokenType::FnAbs},
         {"CONCAT",   TokenType::FnConcat},
+        {"LEAST",    TokenType::FnLeast},
+        {"GREATEST", TokenType::FnGreatest},
         {"EVENT",    TokenType::FnEvent},
     };
     return m;
@@ -149,6 +151,8 @@ std::vector<Token> tokenize(const std::string& input) {
         if (is_ident_start(c)) {
             std::string word;
             while (pos < len && is_ident_char(input[pos]))
+                word += input[pos++];
+            if (pos < len && input[pos] == '?')
                 word += input[pos++];
 
             auto& wm = word_map();

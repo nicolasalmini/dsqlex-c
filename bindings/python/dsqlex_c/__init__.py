@@ -131,8 +131,10 @@ def _extract_result(result_p) -> Any:
             return s.decode("utf-8")
         elif t == DSQLEX_TYPE_BOOL:
             return _lib.dsqlex_result_bool(result_p)
-        else:
+        elif t == DSQLEX_TYPE_NULL:
             return None
+        else:
+            raise DsqlexError(f"Unsupported result type: {t}")
     finally:
         _lib.dsqlex_result_free(result_p)
 
